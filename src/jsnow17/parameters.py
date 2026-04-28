@@ -44,6 +44,7 @@ class Snow17Params(NamedTuple):
     UADJ: Any    # Rain-on-snow wind function (mm/mb/6hr)
     PLWHC: Any   # Liquid water holding capacity
     DAYGM: Any   # Daily ground melt (mm/day)
+    PXADJ: Any   # Precipitation adjustment factor (all precip)
 
 
 # =============================================================================
@@ -52,7 +53,7 @@ class Snow17Params(NamedTuple):
 
 SNOW17_PARAM_NAMES: List[str] = [
     'SCF', 'PXTEMP', 'MFMAX', 'MFMIN', 'NMF',
-    'MBASE', 'TIPM', 'UADJ', 'PLWHC', 'DAYGM',
+    'MBASE', 'TIPM', 'UADJ', 'PLWHC', 'DAYGM', 'PXADJ',
 ]
 
 SNOW17_PARAM_BOUNDS: Dict[str, Tuple[float, float]] = {
@@ -66,6 +67,7 @@ SNOW17_PARAM_BOUNDS: Dict[str, Tuple[float, float]] = {
     'UADJ':   (0.01, 0.2),
     'PLWHC':  (0.01, 0.3),
     'DAYGM':  (0.0, 0.3),
+    'PXADJ':  (0.5, 1.5),
 }
 
 SNOW17_DEFAULTS: Dict[str, float] = {
@@ -79,6 +81,7 @@ SNOW17_DEFAULTS: Dict[str, float] = {
     'UADJ':   0.04,
     'PLWHC':  0.04,
     'DAYGM':  0.0,
+    'PXADJ':  1.0,
 }
 
 # 11-point areal depletion curve (fraction of area covered by snow)

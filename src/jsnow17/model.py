@@ -172,7 +172,9 @@ def snow17_step(
     nmf_dt = params.NMF * (dt_f * 4.0)
     daygm_dt = params.DAYGM * dt_f
 
-    # --- Rain/snow partition with 2C mixed-phase transition ---
+    # --- Precipitation adjustment and rain/snow partition ---
+    precip = precip * params.PXADJ
+
     t_low = params.PXTEMP - 1.0
     t_high = params.PXTEMP + 1.0
     frac_rain = xp.clip((temp - t_low) / xp.maximum(t_high - t_low, 1e-10), 0.0, 1.0)
