@@ -76,6 +76,44 @@ def register() -> None:
     from .config import Snow17ConfigAdapter
     model_manifest("SNOW17", config_adapter=Snow17ConfigAdapter)
 
+    # Contribute Snow-17's calibration bounds to symfluence's catalogue.
+    #
+    # Snow-17 predates the register_model_bounds seam, so symfluence carried a
+    # get_snow17_bounds() entry as a compatibility shim -- a change to these
+    # bounds needed a FRAMEWORK release. Registering here makes this package
+    # the owner; get_model_bounds('SNOW17') resolves what we register, ahead of
+    # the built-in entry.
+    #
+    # PXADJ IS DELIBERATELY EXCLUDED. SNOW17_PARAM_BOUNDS carries 11 entries;
+    # the 10 below are the ones symfluence already serves, value for value, so
+    # adopting the seam changes no calibration result. PXADJ was added after
+    # v0.2.0 and including it here would silently give every "calibrate all
+    # parameters" run an extra knob -- a bounds change that deserves its own
+    # release note rather than arriving inside a no-op migration. Add it in a
+    # deliberate change when PXADJ is meant to be calibrated, and note that
+    # jsacsma composes its own set from this dict, so its parameter-count tests
+    # move at the same time.
+    from symfluence.core.calibration.parameters import ParameterInfo, register_model_bounds
+
+    from .parameters import SNOW17_PARAM_BOUNDS
+
+    _CATALOGUE_NAMES = (
+        'SCF', 'PXTEMP', 'MFMAX', 'MFMIN', 'NMF',
+        'MBASE', 'TIPM', 'UADJ', 'PLWHC', 'DAYGM',
+    )
+    register_model_bounds(
+        "SNOW17",
+        params={
+            name: ParameterInfo(
+                float(SNOW17_PARAM_BOUNDS[name][0]),
+                float(SNOW17_PARAM_BOUNDS[name][1]),
+                description=f"Snow-17 {name}",
+            )
+            for name in _CATALOGUE_NAMES
+        },
+        names=list(_CATALOGUE_NAMES),
+    )
+
 
 if TYPE_CHECKING:
     from .bmi import Snow17BMI
