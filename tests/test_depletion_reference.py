@@ -125,3 +125,31 @@ def test_backend_parity_and_water_conservation_with_history():
         # SCF=PXADJ=1, so effective input equals original precipitation.
         assert pr - q - (new.w_i + new.w_q - before) == pytest.approx(0.0, abs=1e-10)
         state = new
+
+
+def test_optional_energy_diagnostic_preserves_native_outputs():
+    from jsnow17.model import snow17_step
+    from jsnow17.parameters import create_initial_state, params_dict_to_namedtuple
+
+    params = params_dict_to_namedtuple(
+        {
+            "MFMAX": 1.0,
+            "MFMIN": 1.0,
+            "MBASE": 0.0,
+            "NMF": 0.0,
+            "DAYGM": 0.0,
+            "PLWHC": 0.0,
+            "PXTEMP": 2.0,
+        },
+        use_jax=False,
+    )
+    state = create_initial_state(use_jax=False)
+    ordinary, q = snow17_step(0.1, 2.9, 0.125, state, params, 172, 45.0, xp=np)
+    diagnosed, dq, energy = snow17_step(
+        0.1, 2.9, 0.125, state, params, 172, 45.0, xp=np, return_energy=True
+    )
+    np.testing.assert_allclose(ordinary, diagnosed)
+    assert q == pytest.approx(dq)
+    # Non-rain-on-snow melt: MF (six-hour units) * hours/6 * T + rain heat.
+    assert energy[0] == pytest.approx(1.0 * 0.5 * 2.9 + 0.0125 * 0.095 * 2.9)
+    assert energy[1] == 0

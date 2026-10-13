@@ -142,10 +142,14 @@ def snow17_step(
     adc: Any = None,
     xp: Any = np,
     elevation_m: Any = 0.0,
-) -> tuple[Snow17State, Any]:
+    return_energy: bool = False,
+) -> tuple[Snow17State, Any] | tuple[Snow17State, Any, Any]:
     """Execute one timestep of the Snow-17 model (branch-free).
 
     All branching uses ``xp.where()`` for JAX differentiability.
+    With static ``return_energy=True``, append diagnostics containing gross
+    melt-energy equivalent and heat-deficit consumption in mm. The ordinary
+    two-output interface is unchanged.
 
     Args:
         precip: Total precipitation (mm/dt)
@@ -234,6 +238,7 @@ def snow17_step(
 
     # No melt if no ice
     melt = xp.where(w_i > 0.0, melt, 0.0)
+    gross_melt_energy = melt
 
     # Equations 8–9: a cold, equilibrated pack does not accumulate heat
     # deficit indefinitely. New cold snow carries sensible heat deficit.
@@ -293,7 +298,12 @@ def snow17_step(
         fresh_active=history.fresh_active & ~no_snow & (swe_current > history.w_ns),
     )
 
-    return new_state, xp.maximum(outflow + rain_bare, 0.0)
+    rpm = xp.maximum(outflow + rain_bare, 0.0)
+    if return_energy:
+        # Snow-equivalent melt energy and its heat-deficit consumption (mm).
+        # These are budget diagnostics, not geometric snow-cover fractions.
+        return new_state, rpm, xp.stack([gross_melt_energy, consumed])
+    return new_state, rpm
 
 
 # =============================================================================

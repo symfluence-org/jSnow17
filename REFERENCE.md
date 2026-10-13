@@ -30,3 +30,8 @@ geometric exposed-glacier fraction or satellite optical snow observation.
 The package still uses instantaneous liquid retention/drainage, not the full
 operational Snow17 liquid transmission lag. These tests do not establish
 complete operational equivalence, nor validity of any glacier coupling.
+
+`return_energy=True` adds gross melt-energy equivalent and heat-deficit
+consumption diagnostics (mm water equivalent) without changing the ordinary
+Snow17 outputs. These diagnostics enable uniform-HRU snow/ice time allocation;
+they are not geometric area measurements or a full energy-balance budget.
