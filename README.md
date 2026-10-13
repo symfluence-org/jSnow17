@@ -88,3 +88,5 @@ a version-specific DOI is minted via Zenodo for each GitHub release.
 ## License
 
 Apache-2.0. See [LICENSE](LICENSE).
+
+See [REFERENCE.md](REFERENCE.md) for the 0.3.0 numerical changes, reference tests, migration and scientific limitations. Existing fitted parameters require recalibration.

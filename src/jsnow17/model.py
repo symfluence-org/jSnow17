@@ -26,7 +26,7 @@ References:
     NWS River Forecast System User Manual.
 """
 
-from typing import Any, Optional, Tuple
+from typing import Any
 
 import numpy as np
 
@@ -34,6 +34,7 @@ try:
     import jax
     import jax.numpy as jnp
     from jax import lax
+
     HAS_JAX = True
 except ImportError:
     HAS_JAX = False
@@ -51,20 +52,21 @@ from .parameters import (
 )
 
 __all__ = [
-    'HAS_JAX',
-    'seasonal_melt_factor',
-    'snow17_step',
-    'snow17_simulate_jax',
-    'snow17_simulate_numpy',
-    'snow17_simulate',
-    'create_initial_state',
-    'Snow17State',
+    "HAS_JAX",
+    "Snow17State",
+    "create_initial_state",
+    "seasonal_melt_factor",
+    "snow17_simulate",
+    "snow17_simulate_jax",
+    "snow17_simulate_numpy",
+    "snow17_step",
 ]
 
 
 # =============================================================================
 # PHYSICS FUNCTIONS (BACKEND-AGNOSTIC)
 # =============================================================================
+
 
 def seasonal_melt_factor(
     doy: Any,
@@ -93,9 +95,14 @@ def seasonal_melt_factor(
         xp.asarray(0.0),
         xp.asarray(183.0),
     )
-    mf = (mfmax + mfmin) / 2.0 + (mfmax - mfmin) / 2.0 * xp.sin(
-        (xp.asarray(doy, dtype=float) - 81.0 + phase_shift) * 2.0 * xp.pi / 365.0
+    seasonal_day = (xp.asarray(doy, dtype=float) - 1.0 + phase_shift) % 365.0 + 1.0
+    sv = 0.5 * xp.sin((seasonal_day - 81.0) * 2.0 * xp.pi / 366.0) + 0.5
+    av = xp.minimum(
+        xp.clip((seasonal_day - 77.0) / 40.0, 0.0, 1.0),
+        xp.clip((267.0 - seasonal_day) / 40.0, 0.0, 1.0),
     )
+    av = xp.where(xp.abs(xp.asarray(lat)) >= 54.0, av, 1.0)
+    mf = mfmin + sv * av * (mfmax - mfmin)
     return mf
 
 
@@ -120,7 +127,7 @@ def areal_depletion(
     # Linear interpolation using xp.interp
     adc_x = xp.linspace(0.0, 1.0, 11)
     cover = xp.interp(ratio, adc_x, adc)
-    return cover
+    return xp.where(swe > 0, cover, 0.0)
 
 
 def snow17_step(
@@ -134,7 +141,8 @@ def snow17_step(
     si: float = 100.0,
     adc: Any = None,
     xp: Any = np,
-) -> Tuple[Snow17State, Any]:
+    elevation_m: Any = 0.0,
+) -> tuple[Snow17State, Any]:
     """Execute one timestep of the Snow-17 model (branch-free).
 
     All branching uses ``xp.where()`` for JAX differentiability.
@@ -169,7 +177,6 @@ def snow17_step(
     # Melt factor (6hr units in params, scale to timestep)
     mf = seasonal_melt_factor(doy, params.MFMAX, params.MFMIN, lat, xp)
     mf_dt = mf * (dt_f * 4.0)
-    nmf_dt = params.NMF * (dt_f * 4.0)
     daygm_dt = params.DAYGM * dt_f
 
     # --- Precipitation adjustment and rain/snow partition ---
@@ -182,88 +189,87 @@ def snow17_step(
     rain = precip * frac_rain
     snow = precip * (1.0 - frac_rain) * params.SCF
 
-    # Update SWE tracker
-    swe = xp.maximum(swe, w_i + w_q)
+    from .depletion import accumulate_history, effective_snow_area
+
+    history = accumulate_history(state, snow, dt_f, si, adc, xp)
+    swe = history.swe
 
     # --- Accumulation ---
     w_i = w_i + snow
 
     # --- Temperature index update ---
     # When snow exists: update ATI towards current temp
-    ati_snow = ati + params.TIPM * (temp - ati)
+    tipm_step = 1.0 - (1.0 - params.TIPM) ** (dt_f * 4.0)
+    ati_snow = xp.minimum(ati + tipm_step * (temp - ati), 0.0)
+    ati_snow = xp.where(snow > 1.5 * dt_f * 24.0, xp.minimum(temp, 0.0), ati_snow)
     # Constrain ATI to non-positive when cold
     ati_snow = xp.where(temp < 0.0, xp.minimum(ati_snow, 0.0), ati_snow)
     # When no snow: ATI = temp
     ati = xp.where(w_i > 0.0, ati_snow, temp)
 
     # --- Areal depletion ---
-    total_pack = w_i + w_q
-    areal_cover = xp.where(
-        xp.asarray(si, dtype=float) > 0.0,
-        areal_depletion(total_pack, si, adc, xp),
-        xp.where(total_pack > 0.0, 1.0, 0.0),
-    )
+    areal_cover = effective_snow_area(history._replace(w_i=w_i, w_q=w_q), si, adc, xp)
 
     # --- Melt computation (all branches computed, selected with xp.where) ---
     non_rain_melt = mf_dt * xp.maximum(temp - params.MBASE, 0.0) * areal_cover
 
-    # Rain-on-snow melt
-    ros_melt = xp.maximum(0.0, params.UADJ * dt_f * 4.0 * (temp - params.MBASE))
+    # Anderson (2006), equations 5–6. Rain is already rain-only depth.
     rain_heat = 0.0125 * rain * xp.maximum(temp, 0.0)
-    ros_total = ros_melt + rain_heat
-
-    # Select: if rain > 0.3*dt → max(non_rain, ros), else non_rain
-    melt_warm = xp.where(rain > 0.3 * dt_f, xp.maximum(non_rain_melt, ros_total), non_rain_melt)
-
-    # If temp > mbase → warm melt + ground melt, else just ground melt
-    melt = xp.where(
-        temp > params.MBASE,
-        melt_warm + daygm_dt * areal_cover,
-        daygm_dt * areal_cover,
+    hours = 24.0 * dt_f
+    # Standard-atmosphere pressure; elevation is explicit, not a global.
+    pressure = 1013.25 * xp.maximum(1.0 - 2.25577e-5 * elevation_m, 1e-6) ** 5.2559
+    saturation_mb = 2.7489e8 * xp.exp(-4278.63 / (temp + 242.792))
+    longwave = 6.12e-10 * hours * ((temp + 273.0) ** 4 - 273.0**4)
+    turbulent = (
+        8.5
+        * params.UADJ
+        * (hours / 6.0)
+        * (0.9 * saturation_mb - 6.11 + 0.00057 * pressure * temp)
     )
+    rain_melt = xp.maximum(longwave + turbulent + rain_heat, 0.0) * areal_cover
+    non_rain_melt = non_rain_melt + rain_heat * areal_cover
+    potential = xp.where(rain > 0.25 * hours, rain_melt, non_rain_melt)
+    potential = xp.where(temp > params.MBASE, potential, 0.0)
+    melt = potential + daygm_dt * areal_cover
 
     # No melt if no ice
     melt = xp.where(w_i > 0.0, melt, 0.0)
 
-    # Limit melt to available ice
-    melt = xp.minimum(melt, w_i)
-
-    # --- Heat deficit update ---
-    # Cold: increase deficit; warm: decrease deficit
-    deficit_cold = deficit + nmf_dt * xp.maximum(params.MBASE - temp, 0.0) * areal_cover
-    deficit_warm = xp.maximum(0.0, deficit - melt * 0.33)
-    deficit = xp.where(w_i > 0.0, xp.where(temp < 0.0, deficit_cold, deficit_warm), deficit)
-
-    # Apply deficit: melt must overcome deficit before liquid water released
-    melt_after_deficit = xp.maximum(melt - deficit, 0.0)
-    deficit_after_melt = xp.maximum(deficit - melt, 0.0)
-
-    # Only apply deficit logic when both deficit > 0 and melt > 0
-    has_both = (deficit > 0.0) & (melt > 0.0)
-    melt = xp.where(has_both & (w_i > 0.0), melt_after_deficit, melt)
-    deficit = xp.where(has_both & (w_i > 0.0), deficit_after_melt, deficit)
+    # Equations 8–9: a cold, equilibrated pack does not accumulate heat
+    # deficit indefinitely. New cold snow carries sensible heat deficit.
+    gradient = (
+        params.NMF
+        * dt_f
+        * 4.0
+        * (mf / xp.maximum(params.MFMAX, 1e-12))
+        * (ati - xp.minimum(temp, 0.0))
+        * areal_cover
+    )
+    deficit = xp.clip(
+        deficit + gradient + 0.00625 * snow * xp.maximum(-temp, 0.0), 0.0, 0.33 * w_i
+    )
+    consumed = xp.minimum(melt, deficit)
+    deficit = deficit - consumed
+    melt = xp.minimum(melt - consumed, w_i)
 
     # Update ice storage
     w_i = w_i - melt
 
     # --- Liquid water routing ---
-    w_q = w_q + melt + rain
+    rain_bare = rain * (1.0 - areal_cover)
+    w_q = w_q + melt + rain * areal_cover
 
     # Liquid water holding capacity
     w_qx = params.PLWHC * w_i
 
-    # Excess liquid water becomes outflow
-    outflow = xp.maximum(w_q - w_qx, 0.0)
-    w_q = xp.minimum(w_q, w_qx)
-
-    # Refreezing when cold
-    refreeze = xp.where(
-        (temp < params.MBASE) & (w_q > 0.0),
-        xp.minimum(w_q, nmf_dt * xp.maximum(params.MBASE - temp, 0.0)),
-        0.0,
-    )
+    # Refreezing precedes drainage; exports cannot exceed available liquid.
+    refreeze = xp.minimum(w_q, deficit)
+    deficit = deficit - refreeze
     w_i = w_i + refreeze
     w_q = w_q - refreeze
+    w_qx = params.PLWHC * w_i
+    outflow = xp.maximum(w_q - w_qx, 0.0)
+    w_q = xp.minimum(w_q, w_qx)
 
     # Clean up when no snow remains
     no_snow = (w_i <= 0.0) & (w_q <= 0.0)
@@ -275,28 +281,37 @@ def snow17_step(
     swe = xp.where(no_snow, 0.0, xp.maximum(swe, swe_current))
 
     new_state = Snow17State(
-        w_i=w_i, w_q=w_q, w_qx=w_qx,
-        deficit=deficit, ati=ati, swe=swe,
+        w_i=w_i,
+        w_q=w_q,
+        w_qx=w_qx,
+        deficit=deficit,
+        ati=ati,
+        swe=swe,
+        w_ns=xp.where(no_snow, 0.0, history.w_ns),
+        a_ns=xp.where(no_snow, 0.0, history.a_ns),
+        w_100=xp.where(no_snow, 0.0, history.w_100),
+        fresh_active=history.fresh_active & ~no_snow & (swe_current > history.w_ns),
     )
 
-    return new_state, xp.maximum(outflow, 0.0)
+    return new_state, xp.maximum(outflow + rain_bare, 0.0)
 
 
 # =============================================================================
 # SIMULATION FUNCTIONS
 # =============================================================================
 
+
 def snow17_simulate_jax(
     precip: Any,
     temp: Any,
     doy: Any,
     params: Snow17Params,
-    state: Optional[Snow17State] = None,
+    state: Snow17State | None = None,
     lat: float = 45.0,
     si: float = 100.0,
     dt: float = 1.0,
     adc: Any = None,
-) -> Tuple[Any, Snow17State]:
+) -> tuple[Any, Snow17State]:
     """Run Snow-17 simulation using JAX lax.scan.
 
     Args:
@@ -338,12 +353,12 @@ def snow17_simulate_numpy(
     temp: np.ndarray,
     doy: np.ndarray,
     params: Snow17Params,
-    state: Optional[Snow17State] = None,
+    state: Snow17State | None = None,
     lat: float = 45.0,
     si: float = 100.0,
     dt: float = 1.0,
-    adc: Optional[np.ndarray] = None,
-) -> Tuple[np.ndarray, Snow17State]:
+    adc: np.ndarray | None = None,
+) -> tuple[np.ndarray, Snow17State]:
     """Run Snow-17 simulation using NumPy (Python loop fallback).
 
     Args:
@@ -371,8 +386,16 @@ def snow17_simulate_numpy(
 
     for i in range(n):
         state, rpm = snow17_step(
-            np.float64(precip[i]), np.float64(temp[i]), dt, state, params,
-            np.float64(doy[i]), lat, si, adc, xp=np,
+            np.float64(precip[i]),
+            np.float64(temp[i]),
+            dt,
+            state,
+            params,
+            np.float64(doy[i]),
+            lat,
+            si,
+            adc,
+            xp=np,
         )
         rain_plus_melt[i] = float(rpm)
 
@@ -384,13 +407,13 @@ def snow17_simulate(
     temp: Any,
     doy: Any,
     params=None,
-    state: Optional[Snow17State] = None,
+    state: Snow17State | None = None,
     lat: float = 45.0,
     si: float = 100.0,
     dt: float = 1.0,
     use_jax: bool = True,
     adc: Any = None,
-) -> Tuple[Any, Snow17State]:
+) -> tuple[Any, Snow17State]:
     """High-level Snow-17 simulation with automatic backend selection.
 
     Args:
@@ -409,7 +432,9 @@ def snow17_simulate(
         Tuple of (rain_plus_melt array, final state)
     """
     if params is None:
-        params = params_dict_to_namedtuple(SNOW17_DEFAULTS, use_jax=(use_jax and HAS_JAX))
+        params = params_dict_to_namedtuple(
+            SNOW17_DEFAULTS, use_jax=(use_jax and HAS_JAX)
+        )
     elif isinstance(params, dict):
         params = params_dict_to_namedtuple(params, use_jax=(use_jax and HAS_JAX))
 
@@ -417,7 +442,13 @@ def snow17_simulate(
         return snow17_simulate_jax(precip, temp, doy, params, state, lat, si, dt, adc)
     else:
         return snow17_simulate_numpy(
-            np.asarray(precip), np.asarray(temp), np.asarray(doy),
-            params, state, lat, si, dt,
+            np.asarray(precip),
+            np.asarray(temp),
+            np.asarray(doy),
+            params,
+            state,
+            lat,
+            si,
+            dt,
             np.asarray(adc) if adc is not None else None,
         )

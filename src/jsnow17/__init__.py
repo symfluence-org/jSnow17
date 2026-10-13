@@ -27,6 +27,8 @@ References:
     NWS River Forecast System User Manual.
 """
 
+__version__ = "0.3.0"
+
 from typing import TYPE_CHECKING
 
 _LAZY_IMPORTS = {
@@ -46,6 +48,7 @@ _LAZY_IMPORTS = {
     'DEFAULT_ADC': ('.parameters', 'DEFAULT_ADC'),
 
     # Core model
+    'effective_snow_area': ('.depletion', 'effective_snow_area'),
     'snow17_step': ('.model', 'snow17_step'),
     'snow17_simulate': ('.model', 'snow17_simulate'),
     'snow17_simulate_jax': ('.model', 'snow17_simulate_jax'),
@@ -100,6 +103,7 @@ if TYPE_CHECKING:
 
 
 __all__ = [
+    "effective_snow_area",
     'Snow17Config', 'Snow17ConfigAdapter',
     'Snow17BMI',
     'Snow17State', 'Snow17Params',
