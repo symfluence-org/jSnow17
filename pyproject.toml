@@ -7,7 +7,7 @@ sources = ["src"]
 
 [project]
 name = "jsnow17"
-version = "0.2.0"
+version = "0.3.0"
 description = "Snow-17 temperature-index snow model -- symfluence plugin"
 readme = "README.md"
 license = { file = "LICENSE" }

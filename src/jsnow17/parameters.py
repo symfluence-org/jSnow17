@@ -14,7 +14,7 @@ References:
     NWS River Forecast System User Manual.
 """
 
-from typing import Any, Dict, List, NamedTuple, Tuple
+from typing import Any, NamedTuple
 
 import numpy as np
 
@@ -22,81 +22,96 @@ import numpy as np
 # STATE AND PARAMETER STRUCTURES
 # =============================================================================
 
+
 class Snow17State(NamedTuple):
     """Snow-17 model state variables."""
-    w_i: Any     # Ice portion of SWE (mm)
-    w_q: Any     # Liquid water in snowpack (mm)
-    w_qx: Any    # Liquid water capacity (mm)
+
+    w_i: Any  # Ice portion of SWE (mm)
+    w_q: Any  # Liquid water in snowpack (mm)
+    w_qx: Any  # Liquid water capacity (mm)
     deficit: Any  # Heat deficit (mm, energy equiv.)
-    ati: Any     # Antecedent temperature index (C)
-    swe: Any     # Total SWE for areal depletion (mm)
+    ati: Any  # Antecedent temperature index (C)
+    swe: Any  # Seasonal maximum SWE (Wmax, mm), not current SWE
+    w_ns: Any = 0.0  # SWE when a fresh-snow excursion began
+    a_ns: Any = 0.0  # Effective area at that point
+    w_100: Any = 0.0  # SWE below which fresh-snow area falls below one
+    fresh_active: Any = False
 
 
 class Snow17Params(NamedTuple):
     """Snow-17 model parameters."""
-    SCF: Any     # Snowfall correction factor
+
+    SCF: Any  # Snowfall correction factor
     PXTEMP: Any  # Rain/snow threshold temperature (C)
-    MFMAX: Any   # Max melt factor Jun 21 (mm/C/6hr)
-    MFMIN: Any   # Min melt factor Dec 21 (mm/C/6hr)
-    NMF: Any     # Negative melt factor (mm/C/6hr)
-    MBASE: Any   # Base melt temperature (C)
-    TIPM: Any    # Antecedent temperature index weight
-    UADJ: Any    # Rain-on-snow wind function (mm/mb/6hr)
-    PLWHC: Any   # Liquid water holding capacity
-    DAYGM: Any   # Daily ground melt (mm/day)
-    PXADJ: Any   # Precipitation adjustment factor (all precip)
+    MFMAX: Any  # Max melt factor Jun 21 (mm/C/6hr)
+    MFMIN: Any  # Min melt factor Dec 21 (mm/C/6hr)
+    NMF: Any  # Negative melt factor (mm/C/6hr)
+    MBASE: Any  # Base melt temperature (C)
+    TIPM: Any  # Antecedent temperature index weight
+    UADJ: Any  # Rain-on-snow wind function (mm/mb/6hr)
+    PLWHC: Any  # Liquid water holding capacity
+    DAYGM: Any  # Daily ground melt (mm/day)
+    PXADJ: Any  # Precipitation adjustment factor (all precip)
 
 
 # =============================================================================
 # PARAMETER NAMES AND BOUNDS
 # =============================================================================
 
-SNOW17_PARAM_NAMES: List[str] = [
-    'SCF', 'PXTEMP', 'MFMAX', 'MFMIN', 'NMF',
-    'MBASE', 'TIPM', 'UADJ', 'PLWHC', 'DAYGM', 'PXADJ',
+SNOW17_PARAM_NAMES: list[str] = [
+    "SCF",
+    "PXTEMP",
+    "MFMAX",
+    "MFMIN",
+    "NMF",
+    "MBASE",
+    "TIPM",
+    "UADJ",
+    "PLWHC",
+    "DAYGM",
+    "PXADJ",
 ]
 
-SNOW17_PARAM_BOUNDS: Dict[str, Tuple[float, float]] = {
-    'SCF':    (0.7, 1.4),
-    'PXTEMP': (-2.0, 2.0),
-    'MFMAX':  (0.5, 2.0),
-    'MFMIN':  (0.05, 0.6),
-    'NMF':    (0.05, 0.5),
-    'MBASE':  (0.0, 1.0),
-    'TIPM':   (0.01, 1.0),
-    'UADJ':   (0.01, 0.2),
-    'PLWHC':  (0.01, 0.3),
-    'DAYGM':  (0.0, 0.3),
-    'PXADJ':  (0.5, 1.5),
+SNOW17_PARAM_BOUNDS: dict[str, tuple[float, float]] = {
+    "SCF": (0.7, 1.4),
+    "PXTEMP": (-2.0, 2.0),
+    "MFMAX": (0.5, 2.0),
+    "MFMIN": (0.05, 0.6),
+    "NMF": (0.05, 0.5),
+    "MBASE": (0.0, 1.0),
+    "TIPM": (0.01, 1.0),
+    "UADJ": (0.01, 0.2),
+    "PLWHC": (0.01, 0.3),
+    "DAYGM": (0.0, 0.3),
+    "PXADJ": (0.5, 1.5),
 }
 
-SNOW17_DEFAULTS: Dict[str, float] = {
-    'SCF':    1.0,
-    'PXTEMP': 0.0,
-    'MFMAX':  1.0,
-    'MFMIN':  0.3,
-    'NMF':    0.15,
-    'MBASE':  0.0,
-    'TIPM':   0.1,
-    'UADJ':   0.04,
-    'PLWHC':  0.04,
-    'DAYGM':  0.0,
-    'PXADJ':  1.0,
+SNOW17_DEFAULTS: dict[str, float] = {
+    "SCF": 1.0,
+    "PXTEMP": 0.0,
+    "MFMAX": 1.0,
+    "MFMIN": 0.3,
+    "NMF": 0.15,
+    "MBASE": 0.0,
+    "TIPM": 0.1,
+    "UADJ": 0.04,
+    "PLWHC": 0.04,
+    "DAYGM": 0.0,
+    "PXADJ": 1.0,
 }
 
 # 11-point areal depletion curve (fraction of area covered by snow)
 # Index corresponds to SWE/SI ratio from 0.0 to 1.0 in 0.1 increments
-DEFAULT_ADC = np.array([
-    0.0, 0.1, 0.2, 0.3, 0.5, 0.6, 0.7, 0.8, 0.9, 0.95, 1.0
-])
+DEFAULT_ADC = np.array([0.05, 0.1, 0.2, 0.3, 0.5, 0.6, 0.7, 0.8, 0.9, 0.95, 1.0])
 
 
 # =============================================================================
 # CONVERSION UTILITIES
 # =============================================================================
 
+
 def params_dict_to_namedtuple(
-    params_dict: Dict[str, float],
+    params_dict: dict[str, float],
     use_jax: bool = True,
 ) -> Snow17Params:
     """Convert parameter dictionary to Snow17Params NamedTuple.
@@ -110,6 +125,7 @@ def params_dict_to_namedtuple(
     """
     try:
         import jax.numpy as jnp
+
         _has_jax = True
     except ImportError:
         _has_jax = False
@@ -118,7 +134,7 @@ def params_dict_to_namedtuple(
     for name in SNOW17_PARAM_NAMES:
         val = params_dict.get(name, SNOW17_DEFAULTS[name])
         if use_jax and _has_jax:
-            values[name] = val if hasattr(val, 'shape') else jnp.array(float(val))
+            values[name] = val if hasattr(val, "shape") else jnp.array(float(val))
         else:
             values[name] = np.float64(val)
 
@@ -136,17 +152,26 @@ def create_initial_state(use_jax: bool = True) -> Snow17State:
     """
     try:
         import jax.numpy as jnp
+
         _has_jax = True
     except ImportError:
         _has_jax = False
 
     if use_jax and _has_jax:
         return Snow17State(
-            w_i=jnp.array(0.0), w_q=jnp.array(0.0), w_qx=jnp.array(0.0),
-            deficit=jnp.array(0.0), ati=jnp.array(0.0), swe=jnp.array(0.0),
+            w_i=jnp.array(0.0),
+            w_q=jnp.array(0.0),
+            w_qx=jnp.array(0.0),
+            deficit=jnp.array(0.0),
+            ati=jnp.array(0.0),
+            swe=jnp.array(0.0),
         )
     else:
         return Snow17State(
-            w_i=np.float64(0.0), w_q=np.float64(0.0), w_qx=np.float64(0.0),
-            deficit=np.float64(0.0), ati=np.float64(0.0), swe=np.float64(0.0),
+            w_i=np.float64(0.0),
+            w_q=np.float64(0.0),
+            w_qx=np.float64(0.0),
+            deficit=np.float64(0.0),
+            ati=np.float64(0.0),
+            swe=np.float64(0.0),
         )
